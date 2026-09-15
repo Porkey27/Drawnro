@@ -1,0 +1,34 @@
+name: Build DrawNRO
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install portlibs
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          export PATH=$DEVKITPRO/pacman/bin:$PATH
+          dkp-pacman -Sy --noconfirm
+          dkp-pacman -S --noconfirm switch-sdl2 switch-sdl2_ttf switch-sdl2_image \
+                                     switch-freetype switch-libpng switch-libjpeg-turbo \
+                                     switch-zlib switch-bzip2
+
+      - name: Build
+        run: |
+          export DEVKITPRO=/opt/devkitpro
+          export PATH=$DEVKITPRO/pacman/bin:$DEVKITPRO/devkitA64/bin:$PATH
+          make
+
+      - name: Upload .nro
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawnro-nro
+          path: drawnro.nro
