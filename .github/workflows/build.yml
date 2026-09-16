@@ -24,8 +24,9 @@ jobs:
       - name: Build
         run: |
           export DEVKITPRO=/opt/devkitpro
-          export PATH=$DEVKITPRO/pacman/bin:$DEVKITPRO/devkitA64/bin:$PATH
-          make
+          export PORTLIBS_PATH=/opt/devkitpro/portlibs
+          export PATH=$DEVKITPRO/pacman/bin:$DEVKITPRO/devkitA64/bin:$PORTLIBS_PATH/switch/bin:$PATH
+          make V=1
 
       - name: Upload .nro
         uses: actions/upload-artifact@v4
