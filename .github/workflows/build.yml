@@ -18,8 +18,8 @@ jobs:
           export PATH=$DEVKITPRO/pacman/bin:$PATH
           dkp-pacman -Sy --noconfirm
           dkp-pacman -S --noconfirm switch-sdl2 switch-sdl2_ttf switch-sdl2_image \
-                                     switch-freetype switch-harfbuzz switch-libpng switch-libjpeg-turbo \
-                                     switch-zlib switch-bzip2
+                                     switch-freetype switch-harfbuzz switch-mesa \
+                                     switch-libpng switch-libjpeg-turbo switch-zlib switch-bzip2
 
       - name: Build
         run: |
