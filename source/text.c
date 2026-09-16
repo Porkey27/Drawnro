@@ -16,6 +16,7 @@ static int s_frame = 0;
 static TTF_Font *s_fonts[3]; /* small, medium, large */
 static const int s_sizes[3] = {16, 20, 28};
 static void *s_fontMem = NULL;
+static bool s_ready = false; /* false if font/TTF init failed; all text calls become no-ops */
 
 static TTF_Font *pickFont(int ptsize) {
     int bestIdx = 0, bestDiff = 999;
@@ -27,22 +28,23 @@ static TTF_Font *pickFont(int ptsize) {
 }
 
 bool text_init(void) {
+    memset(s_cache, 0, sizeof(s_cache));
+    s_ready = false;
+
     if (TTF_Init() != 0) return false;
 
-    PlFontData fonts[PlSharedFontType_Total];
-    u32 total = 0;
+    PlFontData fonts[1];
     Result rc = plGetSharedFontByType(&fonts[0], PlSharedFontType_Standard);
     if (R_FAILED(rc)) return false;
-    total = 1;
 
     s_fontMem = fonts[0].address;
     for (int i = 0; i < 3; i++) {
         SDL_RWops *rw = SDL_RWFromConstMem(fonts[0].address, (int)fonts[0].size);
+        if (!rw) return false;
         s_fonts[i] = TTF_OpenFontRW(rw, 1, s_sizes[i]);
         if (!s_fonts[i]) return false;
     }
-    (void)total;
-    memset(s_cache, 0, sizeof(s_cache));
+    s_ready = true;
     return true;
 }
 
@@ -86,7 +88,7 @@ static CacheEntry *findOrCreate(SDL_Renderer *r, const char *str, int ptsize, SD
 }
 
 int text_draw(SDL_Renderer *r, int x, int y, const char *str, int ptsize, SDL_Color col) {
-    if (!str || !*str) return 0;
+    if (!s_ready || !str || !*str) return 0;
     CacheEntry *e = findOrCreate(r, str, ptsize, col);
     if (!e) return 0;
     SDL_Rect dst = { x, y, e->w, e->h };
@@ -95,7 +97,7 @@ int text_draw(SDL_Renderer *r, int x, int y, const char *str, int ptsize, SDL_Co
 }
 
 int text_width(const char *str, int ptsize) {
-    if (!str || !*str) return 0;
+    if (!s_ready || !str || !*str) return 0;
     TTF_Font *f = pickFont(ptsize);
     int w = 0, h = 0;
     TTF_SizeUTF8(f, str, &w, &h);

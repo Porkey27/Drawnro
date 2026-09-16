@@ -2,24 +2,118 @@
 #include "ui.h"
 #include "text.h"
 #include "save.h"
+#include <sys/stat.h>
 
 static App app;
 
+/* ---------------------------------------------------------------------
+ * Diagnostics: if anything fails to initialise, we log it to a file on
+ * the SD card AND paint the whole screen a specific solid colour for a
+ * few seconds before closing, so a failure is visible/photographable
+ * even without any way to read logs off the console.
+ *
+ *   RED     - SDL_Init failed
+ *   ORANGE  - window creation failed
+ *   YELLOW  - renderer creation failed (both accelerated and software)
+ *   MAGENTA - plInitialize (system font service) failed
+ *   GREEN   - brush system failed to initialise
+ *   CYAN    - canvas / layer textures failed to initialise
+ *   BLUE    - colour picker failed to initialise
+ *
+ * (Font/text loading failing is NOT fatal - the app just runs without
+ * on-screen labels, since text isn't required for drawing to work.)
+ * ------------------------------------------------------------------- */
+
+static void logMsg(const char *msg) {
+    mkdir("sdmc:/switch", 0777);
+    mkdir("sdmc:/switch/drawnro", 0777);
+    FILE *f = fopen("sdmc:/switch/drawnro/debug.log", "a");
+    if (!f) return;
+    fprintf(f, "%s\n", msg);
+    fclose(f);
+}
+
+static void holdColor(SDL_Renderer *r, Uint8 rr, Uint8 gg, Uint8 bb) {
+    if (!r) return;
+    for (int i = 0; i < 300 && appletMainLoop(); i++) { /* ~5s at 60fps-ish */
+        SDL_SetRenderDrawColor(r, rr, gg, bb, 255);
+        SDL_RenderClear(r);
+        SDL_RenderPresent(r);
+        SDL_Delay(16);
+    }
+}
+
+typedef struct { SDL_Window *window; SDL_Renderer *renderer; } BootResult;
+
+/* stage 1-3: SDL + window + renderer, with logging/colour feedback for each */
+static bool bootSDL(BootResult *out) {
+    logMsg("stage: SDL_Init");
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
+        logMsg("FAILED: SDL_Init");
+        logMsg(SDL_GetError());
+        return false; /* no renderer exists yet, nothing to colour */
+    }
+
+    logMsg("stage: SDL_CreateWindow");
+    out->window = SDL_CreateWindow("DrawNRO", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+                                    SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN);
+    if (!out->window) {
+        logMsg("FAILED: SDL_CreateWindow");
+        logMsg(SDL_GetError());
+        return false;
+    }
+
+    logMsg("stage: SDL_CreateRenderer (accelerated)");
+    out->renderer = SDL_CreateRenderer(out->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!out->renderer) {
+        logMsg("accelerated renderer failed, trying software:");
+        logMsg(SDL_GetError());
+        out->renderer = SDL_CreateRenderer(out->window, -1, SDL_RENDERER_SOFTWARE);
+    }
+    if (!out->renderer) {
+        logMsg("FAILED: SDL_CreateRenderer (both accelerated and software)");
+        logMsg(SDL_GetError());
+        return false; /* still nothing to draw with */
+    }
+    SDL_SetRenderDrawBlendMode(out->renderer, SDL_BLENDMODE_BLEND);
+    logMsg("SDL boot OK");
+    return true;
+}
+
 static bool initEverything(void) {
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) return false;
+    logMsg("stage: plInitialize");
+    if (R_FAILED(plInitialize(PlServiceType_User))) {
+        logMsg("FAILED: plInitialize");
+        holdColor(app.renderer, 255, 0, 255); /* MAGENTA */
+        return false;
+    }
 
-    app.window = SDL_CreateWindow("DrawNRO", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-                                   SCREEN_W, SCREEN_H, SDL_WINDOW_SHOWN);
-    if (!app.window) return false;
+    logMsg("stage: text_init (shared font, non-fatal)");
+    if (!text_init()) {
+        logMsg("WARNING: text_init failed, continuing without on-screen text");
+    }
 
-    app.renderer = SDL_CreateRenderer(app.window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!app.renderer) return false;
-    SDL_SetRenderDrawBlendMode(app.renderer, SDL_BLENDMODE_BLEND);
+    logMsg("stage: brush_init");
+    if (!brush_init(app.renderer)) {
+        logMsg("FAILED: brush_init");
+        holdColor(app.renderer, 0, 255, 0); /* GREEN */
+        return false;
+    }
 
-    if (!text_init()) return false; /* shared system font via pl service */
-    if (!brush_init(app.renderer)) return false;
-    if (!canvas_init(&app.canvas, app.renderer, CANVAS_W, CANVAS_H)) return false;
-    if (!colorpicker_init(app.renderer, &app.colorPicker)) return false;
+    logMsg("stage: canvas_init");
+    if (!canvas_init(&app.canvas, app.renderer, CANVAS_W, CANVAS_H)) {
+        logMsg("FAILED: canvas_init");
+        holdColor(app.renderer, 0, 255, 255); /* CYAN */
+        return false;
+    }
+
+    logMsg("stage: colorpicker_init");
+    if (!colorpicker_init(app.renderer, &app.colorPicker)) {
+        logMsg("FAILED: colorpicker_init");
+        holdColor(app.renderer, 0, 0, 255); /* BLUE */
+        return false;
+    }
+
     undo_init(&app.undo);
     input_init();
     ui_init();
@@ -37,6 +131,7 @@ static bool initEverything(void) {
     app.showGrid = false;
     app.running = true;
     app_pushToast(&app, "Welcome! ZR/finger draws, ZL erases, hold R-stick pans");
+    logMsg("init complete OK");
     return true;
 }
 
@@ -95,7 +190,16 @@ static void handleDrawing(void) {
 int main(int argc, char *argv[]) {
     (void)argc; (void)argv;
 
-    if (R_FAILED(plInitialize(PlServiceType_User))) return 1;
+    logMsg("=== DrawNRO starting ===");
+
+    BootResult boot = { NULL, NULL };
+    if (!bootSDL(&boot)) {
+        /* can't even get a renderer up - nothing to show on screen,
+           the log file is the only record of what happened */
+        return 1;
+    }
+    app.window = boot.window;
+    app.renderer = boot.renderer;
 
     if (!initEverything()) {
         shutdownEverything();
@@ -127,6 +231,7 @@ int main(int argc, char *argv[]) {
         SDL_RenderPresent(app.renderer);
     }
 
+    logMsg("=== DrawNRO exiting normally ===");
     shutdownEverything();
     plExit();
     return 0;
